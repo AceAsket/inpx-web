@@ -72,6 +72,27 @@ function profileRequest(page, payload, session) {
     }, {payload, session});
 }
 
+function observeProfileSession(page) {
+    let session, pending = Promise.resolve();
+    const record = ({userId, profileAccessToken}) => {
+        if (userId && profileAccessToken) session = {userId, profileAccessToken};
+    };
+    page.on('websocket', socket => {
+        socket.on('framereceived', ({payload}) => {
+            try {record(JSON.parse(String(payload)));} catch { /* Protocol keepalive. */ }
+        });
+    });
+    page.on('response', response => {
+        if (response.ok() && new URL(response.url()).pathname.endsWith('/api/profile/login'))
+            pending = pending.then(() => response.json()).then(record);
+    });
+    return async() => {
+        await pending;
+        assert(session, 'Expected a profile login response');
+        return session;
+    };
+}
+
 (async() => {
     const directory = process.env.INPX_ARTIFACT_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-profile-toolbar-'));
     await fs.ensureDir(directory);
@@ -99,6 +120,7 @@ function profileRequest(page, payload, session) {
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
+        const browserSession = observeProfileSession(page);
         let benchmarkOptions = null, benchmarkState = 'idle', performanceReads = 0;
         let isbnWorkers = null;
         const integrationUpdates = [], integrationReplies = [], telegramProbeModes = [];
@@ -374,8 +396,9 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width: 390, height: 900}); await pause(350);
         await page.screenshot({path: path.join(directory, 'toolbar-dark-390.png')});
         await page.setViewportSize({width: 1280, height: 900}); await pause(350);
-        const oldToken = await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session')).profileAccessToken);
-        assert(oldToken);
+        const {profileAccessToken:oldToken} = await browserSession();
+        assert(await page.evaluate(token => !Object.values(localStorage).some(value => value.includes(token)), oldToken),
+            'The active profile bearer must stay out of localStorage');
         await openProfiles(page);
         const dialogLogout = page.locator('.profile-session-actions .profile-logout');
         await dialogLogout.waitFor({state: 'visible'});
@@ -620,6 +643,7 @@ function profileRequest(page, payload, session) {
         const secureBase = `https://127.0.0.1:${proxy.address().port}`;
         const secureContext = await browser.newContext({ignoreHTTPSErrors:true, serviceWorkers:'block', viewport:{width:1280,height:900}});
         const securePage = await secureContext.newPage();
+        const secureBrowserSession = observeProfileSession(securePage);
         const submitSecureCredentials = async() => {
             const dialog = securePage.getByRole('dialog');
             await dialog.getByLabel('Логин', {exact:true}).fill(reader.login);
@@ -722,10 +746,7 @@ function profileRequest(page, payload, session) {
         await updateAuthPolicy(allowOptionalOtpRecovery, async dialog => {
             await dialog.getByLabel('Требовать пароль и OTP для всех', {exact:true}).click();
         }, 'Доверие к браузерам действует 180 дн.');
-        const liveReaderSession = await securePage.evaluate(() => {
-            const stored = JSON.parse(localStorage.getItem('inpx-web-profile-session'));
-            return {userId:stored.currentUserId, profileAccessToken:stored.profileAccessToken};
-        });
+        const liveReaderSession = await secureBrowserSession();
         await openProfiles(page);
         const readerCard = page.locator('.profile-card').filter({has:page.getByText(reader.name, {exact:true})});
         const blockReader = readerCard.getByRole('button', {name:`Заблокировать профиль: ${reader.name}`,exact:true});
