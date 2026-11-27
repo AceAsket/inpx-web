@@ -486,6 +486,7 @@ pub(crate) fn publish(
         size += length as u64;
     }
     encoder.finish()?.flush()?;
+    temporary.as_file().sync_all()?;
     drop(input);
 
     let hash = format!("{:x}", digest.finalize());
@@ -509,6 +510,7 @@ pub(crate) fn publish(
                     if bytes != size {
                         return Err("Размер файла книги изменился при копировании".into());
                     }
+                    raw.as_file().sync_all()?;
                     raw.persist(&raw_path)?;
                 }
                 Err(error) => return Err(error.into()),

@@ -464,7 +464,7 @@ impl<R: Read + Seek> Source<R> {
 
     pub(crate) fn read(&mut self, name: &str, limit: u64) -> Result<Vec<u8>> {
         let (entry, size) = self.entry(name, limit)?;
-        let mut data = Vec::with_capacity(size as usize);
+        let mut data = Vec::with_capacity(size.min(MB) as usize);
         entry
             .take(limit + 1)
             .read_to_end(&mut data)

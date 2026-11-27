@@ -217,9 +217,10 @@ impl LocalBooks {
         decoder: &crate::legacy_library_files::Covers,
         limit: Option<u64>,
     ) -> Result<Cached> {
+        const MAX_BOOK: u64 = 2 * 1024 * 1024 * 1024;
         let extension = book.extension().ok_or(Failure::InvalidType)?;
         let fb2 = extension.eq_ignore_ascii_case("fb2");
-        let cap = limit.unwrap_or(if fb2 { MAX_FB2 } else { u64::MAX });
+        let cap = limit.unwrap_or(if fb2 { MAX_FB2 } else { MAX_BOOK });
         let mut key = DefaultHasher::new();
         book.uid.hash(&mut key);
         let mut entries = self.shards[key.finish() as usize % self.shards.len()]

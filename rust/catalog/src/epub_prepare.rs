@@ -205,7 +205,7 @@ impl<R: BufRead + Seek> Source<R> {
     fn open(mut reader: R, seven_zip: bool) -> Result<Self> {
         if seven_zip || reader.fill_buf()?.starts_with(b"7z\xbc\xaf\x27\x1c") {
             let mut archive =
-                ArchiveReader::new_with_memory_limit(reader, Password::empty(), 128 * 1024)?;
+                ArchiveReader::new_with_memory_limit(reader, Password::empty(), 256 * 1024)?;
             archive.set_thread_count(1);
             return Ok(Self::SevenZip(Box::new(archive)));
         }

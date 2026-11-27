@@ -49,6 +49,7 @@ pub struct ReaderState {
     file: PathBuf,
     progress_file: PathBuf,
     journal: ProgressJournal,
+    write_lock: Mutex<()>,
     follow_checks: Mutex<HashMap<String, String>>,
     metadata: RefCell<Option<(String, Arc<Value>)>>,
 }
@@ -72,6 +73,7 @@ impl ReaderState {
             file: data.join("reading-lists.json"),
             journal: ProgressJournal::new(&progress_file),
             progress_file,
+            write_lock: Mutex::new(()),
             follow_checks: Mutex::default(),
             metadata: RefCell::default(),
         }
@@ -240,6 +242,7 @@ impl ReaderState {
         let can_append = progress_journal::valid_checkpoint(&snapshot.checkpoint)
             && snapshot.offset.max(33).saturating_add(line.len()) <= progress_journal::MAX_BYTES;
         if can_append {
+            let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
             if atomic_file::current_stamp(&self.file)?.as_deref() != Some(expected) {
                 return Err("Файл профилей изменился, повторите запрос".into());
             }
@@ -268,6 +271,7 @@ impl ReaderState {
     }
 
     fn publish(&self, mut snapshot: Snapshot, expected: &str) -> Result<()> {
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         snapshot.data[progress_journal::CHECKPOINT_FIELD] =
             crypto_support::hex(&crypto_support::random::<16>()?).into();
         let mut output = tempfile::NamedTempFile::new_in(

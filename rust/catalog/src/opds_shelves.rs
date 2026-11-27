@@ -48,6 +48,30 @@ pub fn load(path: &Path) -> Result<Vec<CatalogShelf>> {
         options.custom_flags(libc::O_NONBLOCK);
     }
     let file = options.open(path)?;
+    load_file(file)
+}
+
+pub fn load_confined(root: &Path, path: &Path) -> Result<Vec<CatalogShelf>> {
+    let canonical_root = fs::canonicalize(root)?;
+    let canonical_path = fs::canonicalize(path)?;
+    if !canonical_path.starts_with(&canonical_root) || canonical_path == canonical_root {
+        return Err("Файл подборок OPDS должен находиться внутри каталога данных".into());
+    }
+    if !fs::symlink_metadata(&canonical_path)?.is_file() {
+        return Err("Настройки подборок должны быть обычным файлом".into());
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(&canonical_path)?;
+    load_file(file)
+}
+
+fn load_file(file: fs::File) -> Result<Vec<CatalogShelf>> {
     if !file.metadata()?.is_file() {
         return Err("Настройки подборок должны быть обычным файлом".into());
     }
@@ -256,4 +280,38 @@ fn groups(catalogue: &Catalogue, books: &[u32], grouping: Grouping) -> Result<Ve
     }
     groups.sort_by_cached_key(|group| (group.name.to_lowercase(), group.id));
     Ok(groups)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_confined_blocks_escapes_and_external_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&data).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let valid =
+            r#"{"version":1,"shelves":[{"id":"recent","name":"Recent","filters":{"lang":"ru"}}]}"#;
+        let inside_file = data.join("feeds.json");
+        let outside_file = outside.join("feeds.json");
+        fs::write(&inside_file, valid).unwrap();
+        fs::write(&outside_file, valid).unwrap();
+
+        assert_eq!(load_confined(&data, &inside_file).unwrap().len(), 1);
+        assert!(load_confined(&data, &outside_file).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let escape = data.join("escape.json");
+            let internal = data.join("alias.json");
+            symlink(&outside_file, &escape).unwrap();
+            symlink(&inside_file, &internal).unwrap();
+            assert!(load_confined(&data, &escape).is_err());
+            assert_eq!(load_confined(&data, &internal).unwrap().len(), 1);
+        }
+    }
 }

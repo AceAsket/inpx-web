@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ const CHECK: &str = "__softlockcheck";
 pub struct CatalogueLease {
     stop: mpsc::Sender<()>,
     watcher: Option<thread::JoinHandle<()>>,
+    lost: Arc<AtomicBool>,
 }
 
 impl CatalogueLease {
@@ -32,13 +34,20 @@ impl CatalogueLease {
         })?;
         let leases = Mutex::new(HashMap::from([(directory.into(), lease)]));
         let (stop, parent) = mpsc::channel();
+        let lost = Arc::new(AtomicBool::new(false));
+        let watcher_lost = Arc::clone(&lost);
         let watcher = thread::Builder::new()
             .name("catalogue-lock".into())
-            .spawn(move || watch(&leases, parent))?;
+            .spawn(move || watch(&leases, parent, false, Some(&watcher_lost)))?;
         Ok(Self {
             stop,
             watcher: Some(watcher),
+            lost,
         })
+    }
+
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
     }
 }
 
@@ -62,7 +71,7 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
     let leases = Mutex::new(HashMap::new());
     let (stop, parent) = mpsc::channel();
     thread::scope(|scope| {
-        let watcher = scope.spawn(|| watch(&leases, parent));
+        let watcher = scope.spawn(|| watch(&leases, parent, true, None));
         let result = (|| {
             while let Some(command) = header(&mut input)? {
                 let result = update(&leases, command).and_then(|applied| {
@@ -86,15 +95,27 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
 
 type Leases = Mutex<HashMap<PathBuf, Lease>>;
 
-fn watch(leases: &Leases, parent: mpsc::Receiver<()>) {
+fn watch(
+    leases: &Leases,
+    parent: mpsc::Receiver<()>,
+    exit_on_loss: bool,
+    lost: Option<&AtomicBool>,
+) {
     while let Err(mpsc::RecvTimeoutError::Timeout) = parent.recv_timeout(Duration::from_millis(200))
     {
-        let mut active = leases.lock().expect("catalogue leases");
+        let mut active = leases.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(error) = active.values().find_map(|lease| lease.acknowledge().err()) {
             active.clear();
-            // The parent closes the associated stores when their lock worker disappears.
-            eprintln!("inpx-catalog: {error}");
-            std::process::exit(1);
+            if let Some(lost) = lost {
+                lost.store(true, Ordering::Release);
+            }
+            if exit_on_loss {
+                // Standalone lock subprocess: parent closes associated stores when worker exits.
+                eprintln!("inpx-catalog: {error}");
+                std::process::exit(1);
+            }
+            log::error!(target: "inpx::index", "Catalogue lease lost: {error}");
+            return;
         }
     }
 }

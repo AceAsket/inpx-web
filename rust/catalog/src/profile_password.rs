@@ -44,6 +44,14 @@ pub(crate) fn verify(stored: &str, login: &[u8], password: &[u8]) -> Result<bool
     Ok(equal(&actual.0, &expected))
 }
 
+/// Runs an equivalent scrypt derivation for missing/blocked logins so response
+/// timing does not easily distinguish existing usernames from absent ones.
+pub(crate) fn dummy_verify(password: &[u8]) {
+    if password.len() <= MAX_PASSWORD_BYTES {
+        let _ = derive(password, &[0x5a; SALT_BYTES]);
+    }
+}
+
 fn derive(password: &[u8], salt: &[u8; SALT_BYTES]) -> Result<Sensitive<[u8; KEY_BYTES]>> {
     if password.len() > MAX_PASSWORD_BYTES {
         return Err("Пароль слишком длинный".into());

@@ -380,6 +380,8 @@ impl Conversion {
                 let input = raw_input(cache, cached, dir, &source)?;
                 if source == "epub" {
                     validation::epub(&input, deadline)?;
+                } else if source == "fb2" {
+                    validation::fb2(&input)?;
                 }
                 let output = dir.join("output.pdf");
                 self.pdf
@@ -874,7 +876,7 @@ impl Drop for Ticket<'_> {
             .shared
             .active
             .lock()
-            .expect("conversion queue")
+            .unwrap_or_else(|e| e.into_inner())
             .paths
             .remove(self.path);
         self.queue.shared.changed.notify_all();
@@ -967,6 +969,55 @@ pub(crate) fn run(command: Command, deadline: Instant) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn attach(child: &std::process::Child) -> Option<Self> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle().cast()) == 0 {
+                windows_sys::Win32::Foundation::CloseHandle(job);
+                return None;
+            }
+            Some(Self(job))
+        }
+    }
+
+    fn terminate(&self) {
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 pub(crate) fn run_status(mut command: Command, deadline: Instant) -> Result<ExitStatus> {
     remaining(deadline)?;
     #[cfg(unix)]
@@ -979,6 +1030,8 @@ pub(crate) fn run_status(mut command: Command, deadline: Instant) -> Result<Exit
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    #[cfg(windows)]
+    let job = WindowsJob::attach(&child);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -988,6 +1041,10 @@ pub(crate) fn run_status(mut command: Command, deadline: Instant) -> Result<Exit
                 // The converter started in its own group. Stop subprocesses before removing its files.
                 unsafe {
                     libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+                #[cfg(windows)]
+                if let Some(job) = &job {
+                    job.terminate();
                 }
                 let _ = child.kill();
                 let _ = child.wait();

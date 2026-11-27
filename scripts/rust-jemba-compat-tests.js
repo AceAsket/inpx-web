@@ -515,7 +515,8 @@ async function checkDirectFolderCatalogue(binary,directory) {
             try {await searcher.close();} finally {await db.unlock();}
         }
 
-        await fs.writeFile(path.join(libDir,'legacy.fb2'),Buffer.from('<?xml version="1.0" encoding="ISO-8859-1"?>'+book('Café','0'),'latin1'));
+        const iconv = require('iconv-lite');
+        await fs.writeFile(path.join(libDir,'legacy.fb2'),iconv.encode('<?xml version="1.0" encoding="ISO-8859-2"?>'+book('Café','0'),'ISO-8859-2'));
         const fallback=path.join(dataDir,'fallback');
         const phases=[];
         await buildIndexInWorker(config,fallback,update,state=>phases.push(state));

@@ -78,50 +78,55 @@ fn normalize_bounded_bytes(source: &Path, input: &[u8], limit: u64) -> Result<Op
 }
 
 pub(crate) fn decode(bytes: &[u8]) -> Option<Cow<'_, str>> {
-    let encoding = match bytes {
-        [0xff, 0xfe, ..] | [b'<', 0, _, 0, ..] => UTF_16LE,
-        [0xfe, 0xff, ..] | [0, b'<', 0, ..] => UTF_16BE,
+    match bytes {
+        [0xff, 0xfe, ..] | [b'<', 0, _, 0, ..] => {
+            UTF_16LE.decode_without_bom_handling_and_without_replacement(bytes)
+        }
+        [0xfe, 0xff, ..] | [0, b'<', 0, ..] => {
+            UTF_16BE.decode_without_bom_handling_and_without_replacement(bytes)
+        }
         bytes => {
             if let Ok(text) = std::str::from_utf8(bytes) {
                 return Some(Cow::Borrowed(text));
             }
-            // Charset guesses and uncommon declarations retain the existing decoder.
-            let head = &bytes[..bytes.len().min(1024)];
+            let raw = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+            let head = &raw[..raw.len().min(1024)];
             let head = head.trim_ascii_start();
-            let end = head.windows(2).position(|pair| pair == b"?>")? + 2;
-            let declaration = xml_declaration(std::str::from_utf8(&head[..end]).ok()?)?;
-            let (_, value) = encoding_attribute(declaration)?;
-            declared_encoding(value, bytes)?
+            if let Some(end) = head.windows(2).position(|pair| pair == b"?>") {
+                let decl_bytes = &head[..end + 2];
+                if let Ok(decl_str) = std::str::from_utf8(decl_bytes)
+                    && let Some(declaration) = xml_declaration(decl_str)
+                    && let Some((_, value)) = encoding_attribute(declaration)
+                {
+                    let enc = declared_encoding(value)?;
+                    let (decoded, _) = enc.decode_without_bom_handling(raw);
+                    return Some(decoded);
+                }
+            }
+            // FB2 without an explicit XML encoding declaration (common in legacy CP1251 files).
+            if head
+                .windows(12)
+                .any(|w| w.eq_ignore_ascii_case(b"<FictionBook"))
+            {
+                let (decoded, _) = WINDOWS_1251.decode_without_bom_handling(raw);
+                return Some(decoded);
+            }
+            None
         }
-    };
-    encoding.decode_without_bom_handling_and_without_replacement(bytes)
+    }
 }
 
-fn declared_encoding(name: &str, bytes: &[u8]) -> Option<&'static Encoding> {
+fn declared_encoding(name: &str) -> Option<&'static Encoding> {
     let key: String = name
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .map(|ch| ch.to_ascii_lowercase())
         .collect();
-    // iconv-lite and encoding_rs treat undefined Windows code-page bytes differently.
-    let is_defined = |undefined: &[u8]| undefined.iter().all(|byte| memchr(*byte, bytes).is_none());
     Some(match key.as_str() {
-        "windows1250" | "cp1250" | "win1250" | "1250"
-            if is_defined(&[0x81, 0x83, 0x88, 0x90, 0x98]) =>
-        {
-            WINDOWS_1250
-        }
-        "windows1251" | "cp1251" | "win1251" | "1251" if is_defined(&[0x98]) => WINDOWS_1251,
-        "windows1252" | "cp1252" | "win1252" | "1252"
-            if is_defined(&[0x81, 0x8d, 0x8f, 0x90, 0x9d]) =>
-        {
-            WINDOWS_1252
-        }
-        "windows1254" | "cp1254" | "win1254" | "1254"
-            if is_defined(&[0x81, 0x8d, 0x8e, 0x8f, 0x90, 0x9d, 0x9e]) =>
-        {
-            WINDOWS_1254
-        }
+        "windows1250" | "cp1250" | "win1250" | "1250" => WINDOWS_1250,
+        "windows1251" | "cp1251" | "win1251" | "1251" => WINDOWS_1251,
+        "windows1252" | "cp1252" | "win1252" | "1252" | "iso88591" | "latin1" => WINDOWS_1252,
+        "windows1254" | "cp1254" | "win1254" | "1254" => WINDOWS_1254,
         "cp866" | "ibm866" | "866" => IBM866,
         "koi8r" => KOI8_R,
         "koi8u" => KOI8_U,

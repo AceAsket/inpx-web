@@ -572,6 +572,21 @@ impl CatalogueFiles {
         )?;
         fs::remove_dir_all(stage.path().join(".postings"))?;
         fs::remove_dir_all(input_directory)?;
+        if let Ok(entries) = fs::read_dir(stage.path().join("facets")) {
+            for entry in entries {
+                let path = entry?.path();
+                if path.is_file() {
+                    File::options().write(true).open(&path)?.sync_all()?;
+                }
+            }
+            atomic_file::sync_directory(&stage.path().join("facets"))?;
+        }
+        for entry in fs::read_dir(stage.path())? {
+            let path = entry?.path();
+            if path.is_file() {
+                File::options().write(true).open(&path)?.sync_all()?;
+            }
+        }
         atomic_file::sync_directory(stage.path())?;
         // Return the indexer's temporary pages before this worker goes idle.
         #[cfg(all(target_os = "linux", target_env = "musl"))]

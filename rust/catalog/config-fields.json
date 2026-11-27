@@ -139,6 +139,8 @@
     ],
     "rustSecrets": [
         "ttsApiKey",
-        "absToken"
+        "absToken",
+        "accessPassword",
+        "remoteLib.accessPassword"
     ]
 }

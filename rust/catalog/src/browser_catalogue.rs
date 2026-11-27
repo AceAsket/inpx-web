@@ -86,18 +86,28 @@ impl Search {
             let expression = text.starts_with(['=', '*', '#', '~']);
             match key.as_str() {
                 "sz" | "size" | "serno" | "del" | "insno" | "librate" => {
+                    let field = if key == "sz" {
+                        "size".to_owned()
+                    } else {
+                        key.clone()
+                    };
                     if let Some((from, to)) = text.split_once("..") {
-                        let bound = |part: &str| {
+                        let parse_bound = |part: &str, open: f64| -> Result<f64> {
+                            let part = part.trim();
                             if part.is_empty() {
-                                Ok(0.0)
+                                Ok(open)
                             } else {
-                                part.parse::<f64>()
+                                let parsed = part.parse::<f64>()?;
+                                if !parsed.is_finite() {
+                                    return Err("Некорректный числовой фильтр".into());
+                                }
+                                Ok(parsed)
                             }
                         };
                         filters.push(Filter::NumberRange {
-                            field: key.clone(),
-                            from: bound(from)?,
-                            to: bound(to)?,
+                            field,
+                            from: parse_bound(from, f64::NEG_INFINITY)?,
+                            to: parse_bound(to, f64::INFINITY)?,
                         });
                     } else {
                         let values: Vec<f64> = text
@@ -107,10 +117,7 @@ impl Search {
                         if values.iter().any(|value| !value.is_finite()) {
                             return Err("Некорректный числовой фильтр".into());
                         }
-                        filters.push(Filter::NumberValues {
-                            field: key.clone(),
-                            values,
-                        });
+                        filters.push(Filter::NumberValues { field, values });
                     }
                 }
                 "genre" if !expression => filters.push(Filter::Genre {

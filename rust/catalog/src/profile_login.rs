@@ -201,21 +201,39 @@ pub struct DeviceGrant {
     pub max_age_seconds: u32,
 }
 
-/// The caller serializes the operation with other writers to the profile file.
-pub fn authenticate(
-    request: Request,
-    attempts: &Mutex<TotpAttempts>,
-    store: &mut Store,
-) -> Result<Decision> {
-    authenticate_with_role_check(request, attempts, store, |_| true)
+/// Opaque wrapper holding the submitted password for timing-equalized dummy verification.
+pub struct MissingLogin(Secret);
+
+/// Result of the fast, lock-held lookup phase of profile authentication.
+pub enum LoginLookup {
+    Legacy,
+    Missing(MissingLogin),
+    Changed,
+    Ready(Box<PreparedLogin>),
 }
 
-pub fn authenticate_with_role_check(
-    request: Request,
-    attempts: &Mutex<TotpAttempts>,
-    store: &mut Store,
-    permits: impl FnOnce(bool) -> bool,
-) -> Result<Decision> {
+/// Owned snapshot of an account and request parameters, ready for CPU-intensive
+/// password and TOTP verification without holding the profile store mutex.
+pub struct PreparedLogin {
+    profile: Account,
+    policy: Policy,
+    snapshot: Option<(PathBuf, crate::profile_store::Position)>,
+    key_file: PathBuf,
+    password: Secret,
+    otp: Option<Secret>,
+    trusted_device_token: Secret,
+    remember_device: bool,
+}
+
+/// Result of unlocked cryptographic verification, ready to be committed to `Store`.
+pub struct VerifiedLogin {
+    decision: Decision,
+    snapshot: Option<(PathBuf, crate::profile_store::Position)>,
+    patch: Option<CredentialPatch>,
+}
+
+/// Phase 1 (fast, under store lock): load and clone the account snapshot.
+pub fn prepare_login(request: Request, store: &mut Store) -> Result<LoginLookup> {
     let Request {
         source,
         key_file,
@@ -226,28 +244,80 @@ pub fn authenticate_with_role_check(
     } = request;
     let (profile, policy, snapshot) = match source {
         Source::Registry { file, login } => match store.lookup(&file, &login)? {
-            Lookup::Legacy => return Ok(Decision::Legacy),
-            Lookup::Missing => return Ok(Decision::Denied),
-            Lookup::Changed => return Err(CHANGED.into()),
+            Lookup::Legacy => return Ok(LoginLookup::Legacy),
+            Lookup::Missing => return Ok(LoginLookup::Missing(MissingLogin(password))),
+            Lookup::Changed => return Ok(LoginLookup::Changed),
             Lookup::Found(account, policy, position) => {
                 (account.clone(), policy, Some((file, position)))
             }
         },
         Source::Profile { profile } => (profile.account, profile.profile_auth_policy, None),
     };
+    Ok(LoginLookup::Ready(Box::new(PreparedLogin {
+        profile,
+        policy,
+        snapshot,
+        key_file,
+        password,
+        otp,
+        trusted_device_token,
+        remember_device,
+    })))
+}
+
+/// Equalizes response timing for unknown logins without holding the profile store lock.
+pub fn dummy_verify(missing: &MissingLogin) {
+    profile_password::dummy_verify(missing.0.text().as_bytes());
+}
+
+/// Phase 2 (CPU-intensive, no store lock): verify scrypt password, role, TOTP,
+/// and compute any legacy SHA-256 -> scrypt password upgrade hash.
+pub fn verify_prepared(
+    prepared: PreparedLogin,
+    attempts: &Mutex<TotpAttempts>,
+    permits: impl FnOnce(bool) -> bool,
+) -> Result<VerifiedLogin> {
+    let PreparedLogin {
+        profile,
+        policy,
+        snapshot,
+        key_file,
+        password,
+        otp,
+        trusted_device_token,
+        remember_device,
+    } = prepared;
     let password = password.text().as_bytes();
-    if profile.blocked
-        || !profile_password::verify(&profile.password_hash, profile.login.as_bytes(), password)?
-    {
-        return Ok(Decision::Denied);
+    if profile.blocked {
+        profile_password::dummy_verify(password);
+        return Ok(VerifiedLogin {
+            decision: Decision::Denied,
+            snapshot: None,
+            patch: None,
+        });
+    }
+    if !profile_password::verify(&profile.password_hash, profile.login.as_bytes(), password)? {
+        return Ok(VerifiedLogin {
+            decision: Decision::Denied,
+            snapshot: None,
+            patch: None,
+        });
     }
     // A policy-specific error requires a valid password. Check the role before
     // requesting or consuming a second factor or writing any credential changes.
     if !permits(profile.is_admin) {
-        return Ok(Decision::RoleDenied);
+        return Ok(VerifiedLogin {
+            decision: Decision::RoleDenied,
+            snapshot: None,
+            patch: None,
+        });
     }
     if (profile.otp_required || policy.otp_required) && profile.profile_totp.is_none() {
-        return Ok(Decision::NeedOtpSetup);
+        return Ok(VerifiedLogin {
+            decision: Decision::NeedOtpSetup,
+            snapshot: None,
+            patch: None,
+        });
     }
 
     let mut patch = CredentialPatch::default();
@@ -261,16 +331,24 @@ pub fn authenticate_with_role_check(
             if !trust_enabled
                 || !trusted_devices::recognizes(&profile.profile_trusted_devices, token, now)
             {
-                return Ok(Decision::NeedOtp);
+                return Ok(VerifiedLogin {
+                    decision: Decision::NeedOtp,
+                    snapshot: None,
+                    patch: None,
+                });
             }
         } else {
             if !attempts
                 .lock()
-                .expect("TOTP attempts")
+                .unwrap_or_else(|e| e.into_inner())
                 .allows(&profile.id, now)
             {
                 log::debug!(target: "inpx::auth", "otp=rate-limited");
-                return Ok(Decision::Denied);
+                return Ok(VerifiedLogin {
+                    decision: Decision::Denied,
+                    snapshot: None,
+                    patch: None,
+                });
             }
             let remember = (trust_enabled && remember_device).then(|| trusted_devices::Remember {
                 devices: profile.profile_trusted_devices.clone(),
@@ -290,11 +368,15 @@ pub fn authenticate_with_role_check(
                 })
                 .transpose()?
                 .flatten();
-            let mut attempts = attempts.lock().expect("TOTP attempts");
+            let mut attempts = attempts.lock().unwrap_or_else(|e| e.into_inner());
             let Some(result) = accepted else {
                 attempts.failed(&profile.id, now);
                 log::debug!(target: "inpx::auth", "otp=rejected");
-                return Ok(Decision::Denied);
+                return Ok(VerifiedLogin {
+                    decision: Decision::Denied,
+                    snapshot: None,
+                    patch: None,
+                });
             };
             attempts.reset(&profile.id);
             patch.profile_totp = Some(Some(result.state));
@@ -320,16 +402,55 @@ pub fn authenticate_with_role_check(
             .as_deref()
             .unwrap_or(&profile.password_hash),
     );
-    let patch = if let Some((file, position)) = snapshot {
-        store.finish_login(&file, position, (!patch.is_empty()).then_some(&patch))?;
-        None
+    let (accepted_patch, store_patch) = if snapshot.is_some() {
+        (None, (!patch.is_empty()).then_some(patch))
     } else {
-        Some(patch)
+        (Some(patch), None)
     };
-    Ok(Decision::Accepted(Accepted {
-        user_id: profile.id,
-        credential_version,
-        patch,
-        device_grant,
-    }))
+    Ok(VerifiedLogin {
+        decision: Decision::Accepted(Accepted {
+            user_id: profile.id,
+            credential_version,
+            patch: accepted_patch,
+            device_grant,
+        }),
+        snapshot,
+        patch: store_patch,
+    })
+}
+
+/// Phase 3 (fast, under store lock): verify file stamp and commit any credential upgrade.
+pub fn finish_verified(verified: VerifiedLogin, store: &mut Store) -> Result<Decision> {
+    if let Some((file, position)) = verified.snapshot {
+        store.finish_login(&file, position, verified.patch.as_ref())?;
+    }
+    Ok(verified.decision)
+}
+
+/// The caller serializes the operation with other writers to the profile file.
+pub fn authenticate(
+    request: Request,
+    attempts: &Mutex<TotpAttempts>,
+    store: &mut Store,
+) -> Result<Decision> {
+    authenticate_with_role_check(request, attempts, store, |_| true)
+}
+
+pub fn authenticate_with_role_check(
+    request: Request,
+    attempts: &Mutex<TotpAttempts>,
+    store: &mut Store,
+    permits: impl FnOnce(bool) -> bool,
+) -> Result<Decision> {
+    let prepared = match prepare_login(request, store)? {
+        LoginLookup::Legacy => return Ok(Decision::Legacy),
+        LoginLookup::Missing(missing) => {
+            dummy_verify(&missing);
+            return Ok(Decision::Denied);
+        }
+        LoginLookup::Changed => return Err(CHANGED.into()),
+        LoginLookup::Ready(prepared) => prepared,
+    };
+    let verified = verify_prepared(*prepared, attempts, permits)?;
+    finish_verified(verified, store)
 }

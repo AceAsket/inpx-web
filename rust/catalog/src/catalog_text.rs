@@ -18,12 +18,7 @@ pub(crate) fn number(row: &Record, key: &str) -> i64 {
 }
 
 pub(crate) fn supported_text(value: &str) -> bool {
-    value.is_ascii()
-        || value.chars().all(|c| {
-            c.is_ascii()
-                || ('\u{0400}'..='\u{045f}').contains(&c)
-                || get_general_category(c) != GeneralCategory::Unassigned
-        })
+    !value.contains('\0')
 }
 
 pub(crate) fn lower(s: &str) -> Cow<'_, str> {

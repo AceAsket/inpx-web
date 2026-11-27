@@ -102,7 +102,7 @@ impl Catalogue {
         let mut groups = Vec::new();
         let mut limited = false;
         for &(kind, table) in &fields {
-            let keys = [query.to_lowercase(), query.to_lowercase().replace('ё', "е")];
+            let (folded, keys) = suggest_keys(&query);
             let mut samples =
                 self.lookup
                     .browser_samples(&self.lookup_generation, table, &keys, true, 32)?;
@@ -157,7 +157,7 @@ impl Catalogue {
             }
             limited |= samples.limited;
             samples.rows.retain(|row| row.count > 0);
-            let wanted = keys[1].as_str();
+            let wanted = folded.as_str();
             samples.rows.sort_by(|a, b| {
                 relevance(&b.name, wanted, &terms)
                     .cmp(&relevance(&a.name, wanted, &terms))
@@ -380,4 +380,58 @@ fn one_edit(left: &str, right: &str) -> bool {
             && a[at] == b[at + 1]
             && a[at + 1] == b[at]
             && a[at + 2..] == b[at + 2..])
+}
+
+fn suggest_keys(query: &str) -> (String, Vec<String>) {
+    let lowered = query.to_lowercase();
+    let folded = lowered.replace('ё', "е");
+    let mut keys = vec![lowered.clone()];
+    if folded != lowered {
+        keys.push(folded.clone());
+    }
+    for (pos, ch) in folded.char_indices() {
+        if ch == 'е' && keys.len() < 6 {
+            let mut variant = String::with_capacity(folded.len());
+            variant.push_str(&folded[..pos]);
+            variant.push('ё');
+            variant.push_str(&folded[pos + ch.len_utf8()..]);
+            if !keys.contains(&variant) {
+                keys.push(variant);
+            }
+        }
+    }
+    (folded, keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suggest_keys_handles_queries_with_and_without_yo_or_ye() {
+        let (folded, keys) = suggest_keys("Маршрут 00");
+        assert_eq!(folded, "маршрут 00");
+        assert_eq!(keys, vec!["маршрут 00"]);
+        let terms = tokenize("Маршрут 00");
+        assert_eq!(relevance("Маршрут 00", folded.as_str(), &terms), 1000);
+
+        let (folded, keys) = suggest_keys("Ёлка");
+        assert_eq!(folded, "елка");
+        assert_eq!(keys, vec!["ёлка", "елка"]);
+        let terms = tokenize("Ёлка");
+        assert_eq!(relevance("Елка", folded.as_str(), &terms), 1000);
+        assert_eq!(relevance("Ёлка", folded.as_str(), &terms), 1000);
+
+        let (folded, keys) = suggest_keys("Лес");
+        assert_eq!(folded, "лес");
+        assert_eq!(keys, vec!["лес", "лёс"]);
+        let terms = tokenize("Лес");
+        assert_eq!(relevance("Лес", folded.as_str(), &terms), 1000);
+        assert_eq!(relevance("Лёс", folded.as_str(), &terms), 1000);
+
+        let (folded, keys) = suggest_keys("перепереперепере");
+        assert_eq!(folded, "перепереперепере");
+        assert!(keys.len() <= 6);
+        assert_eq!(keys[0], "перепереперепере");
+    }
 }

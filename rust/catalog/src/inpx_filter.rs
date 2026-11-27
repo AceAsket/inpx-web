@@ -1,5 +1,6 @@
-use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use inpx_reader::Record;
@@ -14,12 +15,15 @@ const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 const STACK_LIMIT: usize = 256 * 1024;
 const COMPILE_LIMIT: Duration = Duration::from_secs(1);
 const RECORD_LIMIT: Duration = Duration::from_millis(100);
+const TOTAL_LIMIT: Duration = Duration::from_secs(60);
 
 pub(crate) struct Filter {
     // Drop the persistent function before its context and runtime.
     predicate: Persistent<Function<'static>>,
     context: Context,
-    deadline: Arc<Mutex<Instant>>,
+    epoch: Instant,
+    deadline_ns: Arc<AtomicU64>,
+    spent_ns: Cell<u64>,
     json: RefCell<Vec<u8>>,
 }
 
@@ -37,10 +41,12 @@ impl Filter {
         let runtime = Runtime::new()?;
         runtime.set_memory_limit(MEMORY_LIMIT);
         runtime.set_max_stack_size(STACK_LIMIT);
-        let deadline = Arc::new(Mutex::new(Instant::now() + COMPILE_LIMIT));
-        let interrupt = Arc::clone(&deadline);
+        let epoch = Instant::now();
+        let deadline_ns = Arc::new(AtomicU64::new(COMPILE_LIMIT.as_nanos() as u64));
+        let interrupt = Arc::clone(&deadline_ns);
         runtime.set_interrupt_handler(Some(Box::new(move || {
-            Instant::now() >= *interrupt.lock().expect("INPX filter deadline")
+            let limit = interrupt.load(Ordering::Relaxed);
+            epoch.elapsed().as_nanos() >= u128::from(limit)
         })));
         // Only ECMAScript intrinsics are exposed. No host functions or module loader are installed.
         let context = Context::full(&runtime)?;
@@ -48,7 +54,7 @@ impl Filter {
             let compiled = (|| -> rquickjs::Result<_> {
                 let constructor: Constructor = ctx.globals().get("Function")?;
                 let factory: Function =
-                    constructor.construct((format!("'use strict'; return {source}"),))?;
+                    constructor.construct((format!("'use strict'; return (\n{source}\n)"),))?;
                 let predicate: Function = factory.call(())?;
                 Ok(Persistent::save(&ctx, predicate))
             })();
@@ -59,16 +65,31 @@ impl Filter {
         Ok(Some(Self {
             predicate,
             context,
-            deadline,
+            epoch,
+            deadline_ns,
+            spent_ns: Cell::new(0),
             json: RefCell::new(Vec::new()),
         }))
     }
 
     pub(crate) fn includes(&self, record: &Record) -> Result<bool> {
+        let budget = TOTAL_LIMIT.as_nanos() as u64;
+        let used = self.spent_ns.get();
+        if used >= budget {
+            return Err("Превышен общий лимит времени выполнения filter INPX".into());
+        }
         let mut json = self.json.borrow_mut();
         json.clear();
         serde_json::to_writer(&mut *json, record)?;
-        *self.deadline.lock().expect("INPX filter deadline") = Instant::now() + RECORD_LIMIT;
+        let started = Instant::now();
+        let remaining = Duration::from_nanos(budget - used).min(RECORD_LIMIT);
+        let target = self
+            .epoch
+            .elapsed()
+            .saturating_add(remaining)
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
+        self.deadline_ns.store(target, Ordering::Relaxed);
         let result = self.context.with(|ctx| {
             let evaluated = (|| -> rquickjs::Result<_> {
                 let predicate = self.predicate.clone().restore(&ctx)?;
@@ -87,6 +108,8 @@ impl Filter {
                 .catch(&ctx)
                 .map_err(|error| format!("Ошибка выполнения filter INPX: {error}"))
         });
+        let delta = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.spent_ns.set(used.saturating_add(delta));
         Ok(result?)
     }
 }

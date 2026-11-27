@@ -201,12 +201,31 @@ impl<R: Read + Seek> Archive<R> {
                 "{}.zip",
                 path.file_stem().unwrap_or_default().to_string_lossy()
             );
+            const MAX_INP_LINE: u64 = 1024 * 1024;
+            const MAX_INP_ENTRY: u64 = 512 * 1024 * 1024;
             let entry = self.zip.by_index(index).map_err(io::Error::other)?;
             let mut input = BufReader::with_capacity(64 * 1024, entry);
+            let mut entry_bytes = 0u64;
             loop {
                 row.clear();
-                if input.read_until(b'\n', &mut row)? == 0 {
+                let read = (&mut input)
+                    .take(MAX_INP_LINE + 1)
+                    .read_until(b'\n', &mut row)?;
+                if read == 0 {
                     break;
+                }
+                if read as u64 > MAX_INP_LINE {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("INP line exceeds {MAX_INP_LINE} bytes in {folder}"),
+                    ));
+                }
+                entry_bytes = entry_bytes.saturating_add(read as u64);
+                if entry_bytes > MAX_INP_ENTRY {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("INP entry exceeds {MAX_INP_ENTRY} bytes: {folder}"),
+                    ));
                 }
                 if row.last() == Some(&b'\n') {
                     row.pop();
@@ -232,11 +251,15 @@ impl<R: Read + Seek> Archive<R> {
 }
 
 fn read_info<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> String {
-    let Ok(mut entry) = zip.by_name(name) else {
+    const MAX_INFO: u64 = 1024 * 1024;
+    let Ok(entry) = zip.by_name(name) else {
         return String::new();
     };
+    if entry.is_dir() {
+        return String::new();
+    }
     let mut bytes = Vec::new();
-    if entry.is_dir() || entry.read_to_end(&mut bytes).is_err() {
+    if entry.take(MAX_INFO + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_INFO {
         return String::new();
     }
     String::from_utf8_lossy(&bytes)

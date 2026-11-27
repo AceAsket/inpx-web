@@ -170,7 +170,15 @@ pub(crate) fn stage_backup(
         .as_object_mut()
         .ok_or("Неверный формат config.json")?;
     fields.insert("dataDir".into(), serde_json::to_value(data)?);
-    for name in ["tempDir", "logDir"] {
+    for name in [
+        "tempDir",
+        "logDir",
+        "converterPaths",
+        "kindlingPath",
+        "fb2cngConfigPath",
+        "inpxFilterFile",
+        "opdsFeedsFile",
+    ] {
         if let Some(path) = current.get(name) {
             fields.insert(name.into(), path.clone());
         } else {

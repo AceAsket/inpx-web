@@ -246,7 +246,7 @@ pub(crate) fn bounded(size: u64, limit: u64, input: &mut dyn Read) -> Result<Vec
     if size > limit {
         return Err(Failure::Limit);
     }
-    let mut bytes = Vec::with_capacity(size as usize);
+    let mut bytes = Vec::with_capacity(size.min(1024 * 1024) as usize);
     input
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)?;

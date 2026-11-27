@@ -988,10 +988,17 @@ impl SevenZip {
         if !entry.has_stream {
             return process(entry.size, &mut io::empty());
         }
+        const MAX_SOLID_SCAN: u64 = 2 * 1024 * 1024 * 1024;
         let block = self.archive.stream_map.file_block_index[index].ok_or(Failure::Missing)?;
         let mut result = Err(Failure::Missing);
+        let mut scanned = 0u64;
         self.visit_block(source, block, |candidate, reader, _large| {
             if !std::ptr::eq(entry, candidate) {
+                scanned = scanned.saturating_add(candidate.size);
+                if scanned > MAX_SOLID_SCAN {
+                    result = Err(Failure::Limit);
+                    return Ok(false);
+                }
                 return Ok(true);
             }
             result = process(entry.size, reader);

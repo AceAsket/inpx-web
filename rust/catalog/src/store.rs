@@ -370,7 +370,7 @@ pub struct BookStore {
     base: ReadOnlyDatabase,
     patch: Option<ReadOnlyDatabase>,
     directory: PathBuf,
-    facets: [OnceCell<Option<Postings>>; Facet::Source as usize + 1],
+    facets: [OnceCell<Postings>; Facet::Source as usize + 1],
     active_books: OnceCell<SelectedBooks>,
     wide_order: Mutex<Option<(String, Arc<WideOrder>)>>,
     lookup: OnceCell<LookupIndex>,
@@ -885,9 +885,10 @@ impl BookStore {
         table: Facet,
         read: impl FnOnce(Option<&Postings>) -> Result<T>,
     ) -> Result<T> {
-        let index =
-            self.facets[table as usize].get_or_init(|| Postings::open(&self.directory, table).ok());
-        read(index.as_ref())
+        let index = self.facets[table as usize]
+            .get_or_try_init(|| Postings::open(&self.directory, table))
+            .ok();
+        read(index)
     }
 
     fn facet_selection(&self, groups: Vec<FacetRows>) -> Result<SelectedBooks> {
