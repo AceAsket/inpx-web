@@ -37,7 +37,14 @@ function Download-VerifiedFile {
 
   Invoke-WebRequest -Uri $Uri -OutFile $OutFile
   if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-    $actual = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [System.IO.File]::OpenRead($OutFile)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $actual = [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+      $stream.Dispose()
+    }
     $expected = $ExpectedSha256.Trim().ToLowerInvariant()
     if ($actual -ne $expected) {
       Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
