@@ -392,18 +392,23 @@ async function main() {
             stream.on('data', data => { output = (output + data).slice(-16000); });
         const url = `http://127.0.0.1:${port}`;
         let ready = false;
+        let readiness = 'No response yet';
         const deadline = Date.now() + 60000;
         while (Date.now() < deadline && child.exitCode === null) {
             try {
                 const response = await fetch(`${url}/ready`, {signal: AbortSignal.timeout(2000)});
-                if (response.ok && (await response.json()).ready) {
+                const body = await response.text();
+                readiness = `HTTP ${response.status}: ${body.slice(0, 400)}`;
+                if (response.ok && JSON.parse(body).ready) {
                     ready = true;
                     break;
                 }
-            } catch (error) { /* Startup may not have bound the port yet. */ }
+            } catch (error) {
+                if (!(error instanceof SyntaxError)) readiness = error.cause?.message || error.message;
+            }
             await sleep(250);
         }
-        assert.ok(ready, `Packaged application did not index the fixture and become ready:\n${output}`);
+        assert.ok(ready, `Packaged application did not index the fixture and become ready (${readiness}):\n${output}`);
         if (rust) {
             assert.match(output,/^inpx-web v[^\s]+ listening on /m);
             if (imageName) await promisify(execFile)('docker',['exec',containerName,'sh','-ec',

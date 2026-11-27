@@ -157,151 +157,14 @@ parse_server_cmdline() {
 }
 
 parse_config_json() {
-    local config_file="$1"
-    LC_ALL=C awk '
-    function unescape_json(raw,    i, n, ch, nxt, out) {
-        out = ""
-        n = length(raw)
-        i = 1
-        while (i <= n) {
-            ch = substr(raw, i, 1)
-            if (ch == "\\" && i < n) {
-                i++
-                nxt = substr(raw, i, 1)
-                if (nxt == "\"" || nxt == "\\" || nxt == "/") out = out nxt
-                else if (nxt == "b") out = out "\b"
-                else if (nxt == "f") out = out "\f"
-                else if (nxt == "n") out = out "\n"
-                else if (nxt == "r") out = out "\r"
-                else if (nxt == "t") out = out "\t"
-                else out = out nxt
-            } else {
-                out = out ch
-            }
-            i++
-        }
-        return out
-    }
-    { text = text $0 "\n" }
-    END {
-        sub(/^\357\273\277/, "", text)
-        n = length(text)
-        i = 1
-        depth = 0
-        in_server = 0
-        top_key = ""
-        sub_key = ""
-        server_port = ""
-        server_host = ""
-
-        while (i <= n) {
-            ch = substr(text, i, 1)
-            if (ch == " " || ch == "\t" || ch == "\r" || ch == "\n") {
-                i++
-                continue
-            }
-            if (ch == "{") {
-                if (depth == 1 && stack[1] == "{" && after_colon[1] && top_key == "server") {
-                    in_server = 1
-                }
-                depth++
-                stack[depth] = "{"
-                expect_key[depth] = 1
-                after_colon[depth] = 0
-                i++
-                continue
-            }
-            if (ch == "[") {
-                depth++
-                stack[depth] = "["
-                expect_key[depth] = 0
-                after_colon[depth] = 0
-                i++
-                continue
-            }
-            if (ch == "}" || ch == "]") {
-                if (depth == 2 && in_server) {
-                    in_server = 0
-                    sub_key = ""
-                }
-                if (depth > 0) {
-                    depth--
-                    if (depth > 0) after_colon[depth] = 0
-                }
-                i++
-                continue
-            }
-            if (ch == ":") {
-                if (depth > 0 && stack[depth] == "{") {
-                    expect_key[depth] = 0
-                    after_colon[depth] = 1
-                }
-                i++
-                continue
-            }
-            if (ch == ",") {
-                if (depth > 0) {
-                    after_colon[depth] = 0
-                    if (stack[depth] == "{") {
-                        expect_key[depth] = 1
-                        if (depth == 1) top_key = ""
-                        if (depth == 2 && in_server) sub_key = ""
-                    }
-                }
-                i++
-                continue
-            }
-            if (ch == "\"") {
-                i++
-                start = i
-                while (i <= n) {
-                    c = substr(text, i, 1)
-                    if (c == "\\") {
-                        i += 2
-                        continue
-                    }
-                    if (c == "\"") break
-                    i++
-                }
-                raw = substr(text, start, i - start)
-                val = unescape_json(raw)
-                i++
-                if (depth == 1 && stack[1] == "{" && expect_key[1]) {
-                    top_key = val
-                    expect_key[1] = 0
-                } else if (depth == 2 && in_server && stack[2] == "{") {
-                    if (expect_key[2]) {
-                        sub_key = val
-                        expect_key[2] = 0
-                    } else if (after_colon[2]) {
-                        if (sub_key == "port") server_port = val
-                        else if (sub_key == "host") server_host = val
-                        after_colon[2] = 0
-                    }
-                }
-                continue
-            }
-            start = i
-            while (i <= n) {
-                c = substr(text, i, 1)
-                if (c == " " || c == "\t" || c == "\r" || c == "\n" || c == "," || c == "}" || c == "]" || c == ":" || c == "{" || c == "[" || c == "\"") break
-                i++
-            }
-            if (i == start) {
-                i++
-                continue
-            }
-            prim = substr(text, start, i - start)
-            if (depth == 2 && in_server && stack[2] == "{" && after_colon[2]) {
-                if (sub_key == "port" && prim != "null") server_port = prim
-                after_colon[2] = 0
-            }
-        }
-
-        if (server_port != "" && server_port !~ /[\r\n]/) printf "port=%s\n", server_port
-        if (server_host != "" && server_host !~ /[\r\n]/) printf "host=%s\n", server_host
-    }
-    ' "$config_file" 2>/dev/null
+    jq -r '
+        def field($name; $value):
+            $value | select(type == "string" or type == "number")
+                   | tostring | select(length > 0 and (test("[\r\n]") | not))
+                   | "\($name)=\(.)";
+        field("port"; .server.port),
+        field("host"; (.server.host | strings))
+    ' "$1" 2>/dev/null
 }
 
 is_valid_port() {
@@ -330,7 +193,8 @@ probe_health() {
     exec 3>&- 2>/dev/null || true
 
     status_line="${status_line%$'\r'}"
-    [[ "$status_line" =~ ^HTTP/[0-9.]+[[:space:]]+200([[:space:]]|$) ]]
+    # Deployments can require authentication even on /health.
+    [[ "$status_line" =~ ^HTTP/[0-9.]+[[:space:]]+(200|401|403)([[:space:]]|$) ]]
 }
 
 CMDLINE_ARGS=()

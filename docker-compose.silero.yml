@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
     environment:
       SILERO_MODEL: ${INPX_TTS_MODEL:-v5_6_ru}
+      SILERO_MODEL_SHA256: ${SILERO_MODEL_SHA256:-}
       SILERO_THREADS: "4"
       SILERO_STRESS_ENABLED: ${SILERO_STRESS_ENABLED:-true}
     volumes:

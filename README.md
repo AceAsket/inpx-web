@@ -50,6 +50,8 @@ docker run -d --name inpx-web --restart unless-stopped \
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
+В `2.0.5-rc.1` свежий Docker-том позволяет серверу работать с UID `10001`. Для существующей папки контейнер сохраняет владельцев файлов и использует прежний режим, если у этого UID нет доступа. При необходимости можно явно оставить запуск от root, задав `INPX_ALLOW_ROOT=true`.
+
 ### Nginx Proxy Manager и Windows standalone
 
 В карточке Proxy Host укажите адрес Windows-сервера и порт INPX Web. Включите **Websockets Support**. На Windows добавьте в `config.json` адрес, с которого подключается Nginx Proxy Manager. Ниже пример для прокси с адресом `192.168.1.99`.

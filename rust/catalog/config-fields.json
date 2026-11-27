@@ -135,12 +135,12 @@
         "telegramProxyPassword",
         "smtpPass",
         "opds.password",
-        "metricsToken"
+        "metricsToken",
+        "accessPassword",
+        "remoteLib.accessPassword"
     ],
     "rustSecrets": [
         "ttsApiKey",
-        "absToken",
-        "accessPassword",
-        "remoteLib.accessPassword"
+        "absToken"
     ]
 }

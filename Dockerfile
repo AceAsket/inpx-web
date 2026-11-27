@@ -112,7 +112,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates p7zip-full webp tini \
+    && apt-get install -y --no-install-recommends ca-certificates jq libjxl-tools p7zip-full webp tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home-dir /usr/local/bin/.inpx-web --shell /usr/sbin/nologin inpx \
     && mkdir -p /usr/local/bin/.inpx-web /library \
