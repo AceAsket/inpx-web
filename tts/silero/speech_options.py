@@ -78,6 +78,34 @@ def validate_segments(segments, text):
     return segments
 
 
+_SENTENCE_END_PUNCT = frozenset(".!?…")
+_SENTENCE_CLOSERS = frozenset("\"»”'")
+
+
+def _split_sentences(paragraph):
+    sentences = []
+    start = 0
+    index = 0
+    length = len(paragraph)
+    while index < length:
+        if paragraph[index] in _SENTENCE_END_PUNCT:
+            while index < length and paragraph[index] in _SENTENCE_END_PUNCT:
+                index += 1
+            while index < length and paragraph[index] in _SENTENCE_CLOSERS:
+                index += 1
+            if index == length or paragraph[index].isspace():
+                piece = paragraph[start:index].strip()
+                if piece:
+                    sentences.append(piece)
+                start = index
+            continue
+        index += 1
+    tail = paragraph[start:].strip()
+    if tail:
+        sentences.append(tail)
+    return sentences
+
+
 def tuned_chunks(segments, options, normalize_text, limit=700, accentuate=None):
     replace = dictionary_replacer(options["dictionary"])
     processed = 0
@@ -91,7 +119,7 @@ def tuned_chunks(segments, options, normalize_text, limit=700, accentuate=None):
             if not re.search(r"[А-Яа-яЁё]", paragraph):
                 continue
             last = index == len(paragraphs) - 1
-            sentences = [sentence.strip() for sentence in re.findall(r".*?(?:[.!?…]+[\"»”']*(?=\s|$)|$)", paragraph) if sentence.strip()]
+            sentences = _split_sentences(paragraph)
             buffer, count = [], 0
             for number, sentence in enumerate(sentences):
                 pieces = []
@@ -100,7 +128,7 @@ def tuned_chunks(segments, options, normalize_text, limit=700, accentuate=None):
                     if cut < 1:
                         cut = limit
                     # Keep an explicit stress marker attached to its vowel.
-                    if sentence[cut - 1] == "+":
+                    if cut > 1 and sentence[cut - 1] == "+":
                         cut -= 1
                     pieces.append(sentence[:cut].strip())
                     sentence = sentence[cut:].strip()

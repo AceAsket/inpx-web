@@ -52,7 +52,7 @@ def context_blocks(text, limit=1500):
         cut = ends[-1].end() if ends else prefix.rfind(" ")
         if cut < 1:
             cut = limit
-        if text[cut - 1] == "+":
+        if cut > 1 and text[cut - 1] == "+":
             cut -= 1
         yield text[:cut].strip()
         text = text[cut:].strip()

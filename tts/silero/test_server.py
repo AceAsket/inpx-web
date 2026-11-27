@@ -8,11 +8,19 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 import server
 from server import normalize_numbers, normalize_text, split_text
-from speech_options import normalize_options, dictionary_replacer, tuned_chunks, validate_segments, trailing_pause
+from speech_options import (
+    normalize_options,
+    dictionary_replacer,
+    tuned_chunks,
+    validate_segments,
+    trailing_pause,
+    _split_sentences,
+)
 from accentuation import StressProcessor, context_blocks
 
 
@@ -264,6 +272,197 @@ class TextPreparationTests(unittest.TestCase):
             server.API_KEY = original
             server.CANCELLATIONS.pop(request_id, None)
             server.JOBS.pop(request_id, None)
+
+    def test_plus_prefix_does_not_infinite_loop_in_splitters(self):
+        pathological = "+ " + ("а" * 900)
+        chunks = list(split_text(pathological, limit=700))
+        self.assertGreaterEqual(len(chunks), 2)
+        blocks = list(context_blocks("+ " + ("а" * 1600), limit=1500))
+        self.assertGreaterEqual(len(blocks), 2)
+        options = normalize_options({})
+        tuned = list(tuned_chunks([dict(text=pathological)], options, normalize_text, limit=700))
+        self.assertGreaterEqual(len(tuned), 2)
+
+    def test_sentence_splitting_is_linear_without_redos(self):
+        import time
+        options = normalize_options({})
+        text = "слово " * 8000
+        started = time.monotonic()
+        chunks = list(tuned_chunks([dict(text=text)], options, normalize_text))
+        elapsed = time.monotonic() - started
+        self.assertGreater(len(chunks), 50)
+        self.assertLess(elapsed, 2.0)
+
+    def test_sentence_splitting_dots_redos_is_linear(self):
+        import time
+        self.assertEqual(
+            _split_sentences('Первое предложение. "Второе?!" Третье... «Четвёртое»! Привет."! Мир'),
+            ['Первое предложение.', '"Второе?!"', 'Третье...', '«Четвёртое»!', 'Привет."!', 'Мир'],
+        )
+        for payload in ("." * 20000 + "а", "." * 20000 + '"' * 5000 + "а"):
+            started = time.monotonic()
+            sentences = _split_sentences(payload)
+            elapsed = time.monotonic() - started
+            self.assertEqual(sentences, [payload])
+            self.assertLess(elapsed, 1.0)
+        options = normalize_options({})
+        started = time.monotonic()
+        chunks = list(tuned_chunks([dict(text="." * 20000 + "а")], options, normalize_text))
+        elapsed = time.monotonic() - started
+        self.assertGreater(len(chunks), 20)
+        self.assertLess(elapsed, 1.0)
+
+    def test_tempdir_failure_releases_lock_for_next_request(self):
+        original = server.API_KEY
+        server.API_KEY = "test-key"
+        http = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{http.server_address[1]}"
+        headers = {"Authorization": "Bearer test-key", "Content-Type": "application/json"}
+        req1_id = "e" * 64
+        req2_id = "f" * 64
+        try:
+            with patch("server.tempfile.TemporaryDirectory", side_effect=OSError("No space left on device")):
+                with self.assertLogs(level="ERROR") as logs:
+                    req = urllib.request.Request(
+                        base + "/synthesize",
+                        data=json.dumps({"text": "Привет мир", "speaker": "xenia", "requestId": req1_id}).encode(),
+                        headers=headers,
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as err:
+                        urllib.request.urlopen(req)
+                    self.assertEqual(err.exception.code, 500)
+                self.assertTrue(any("Synthesis failed" in line for line in logs.output))
+            self.assertEqual(server.JOBS[req1_id]["state"], "error")
+            self.assertFalse(server.LOCK.locked())
+
+            def fake_synthesize(text, speaker, directory, request_id="", options=None, segments=None):
+                output = Path(directory) / "speech.mp3"
+                output.write_bytes(b"ID3-test-mp3")
+                server.update_job(request_id, state="ready", progress=1, remainingSeconds=0)
+                return output
+
+            with patch("server.synthesize", side_effect=fake_synthesize):
+                req = urllib.request.Request(
+                    base + "/synthesize",
+                    data=json.dumps({"text": "Привет мир", "speaker": "xenia", "requestId": req2_id}).encode(),
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.read(), b"ID3-test-mp3")
+            self.assertFalse(server.LOCK.locked())
+        finally:
+            http.shutdown()
+            http.server_close()
+            thread.join(timeout=2)
+            server.API_KEY = original
+            server.JOBS.pop(req1_id, None)
+            server.JOBS.pop(req2_id, None)
+
+    def test_pre_header_socket_errors_return_500_not_cancelled(self):
+        from http.client import IncompleteRead
+        original = server.API_KEY
+        server.API_KEY = "test-key"
+        httpd = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        headers = {"Authorization": "Bearer test-key", "Content-Type": "application/json"}
+        request_ids = []
+        try:
+            cases = (
+                (TimeoutError("model download timed out"), "1" * 64),
+                (BrokenPipeError("ffmpeg stdin broken"), "2" * 64),
+                (ConnectionResetError("upstream reset"), "3" * 64),
+            )
+            for exc, request_id in cases:
+                request_ids.append(request_id)
+                with patch("server.synthesize", side_effect=exc):
+                    with self.assertLogs(level="ERROR") as logs:
+                        req = urllib.request.Request(
+                            base + "/synthesize",
+                            data=json.dumps({"text": "Привет мир", "speaker": "xenia", "requestId": request_id}).encode(),
+                            headers=headers,
+                        )
+                        with self.assertRaises(urllib.error.HTTPError) as err:
+                            urllib.request.urlopen(req)
+                        self.assertEqual(err.exception.code, 500)
+                        body = json.loads(err.exception.read().decode("utf-8"))
+                        self.assertIn("error", body)
+                    self.assertTrue(any("Synthesis failed" in line for line in logs.output))
+                self.assertEqual(server.JOBS[request_id]["state"], "error")
+                self.assertFalse(server.LOCK.locked())
+
+            post_header_id = "4" * 64
+            request_ids.append(post_header_id)
+
+            def fake_synthesize(text, speaker, directory, request_id="", options=None, segments=None):
+                output = Path(directory) / "speech.mp3"
+                output.write_bytes(b"ID3-stream-bytes")
+                server.update_job(request_id, state="ready", progress=1, remainingSeconds=0)
+                return output
+
+            with patch("server.synthesize", side_effect=fake_synthesize), \
+                 patch("server.shutil.copyfileobj", side_effect=BrokenPipeError("client disconnected")), \
+                 self.assertNoLogs(level="ERROR"):
+                req = urllib.request.Request(
+                    base + "/synthesize",
+                    data=json.dumps({"text": "Привет мир", "speaker": "xenia", "requestId": post_header_id}).encode(),
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req) as response:
+                    self.assertEqual(response.status, 200)
+                    with self.assertRaises(IncompleteRead):
+                        response.read()
+            self.assertEqual(server.JOBS[post_header_id]["state"], "ready")
+            self.assertFalse(server.LOCK.locked())
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=2)
+            server.API_KEY = original
+            for request_id in request_ids:
+                server.JOBS.pop(request_id, None)
+
+    def test_non_ascii_authorization_and_value_error_http_status(self):
+        original = server.API_KEY
+        server.API_KEY = "test-key"
+        http = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{http.server_address[1]}"
+        try:
+            self.assertFalse(server._authorized("Bearer кириллица"))
+            self.assertTrue(server._authorized("Bearer test-key"))
+            headers = {"Authorization": "Bearer test-key", "Content-Type": "application/json"}
+            with patch("server.synthesize", side_effect=ValueError("Normalized text exceeds synthesis limit")):
+                req = urllib.request.Request(
+                    base + "/synthesize",
+                    data=json.dumps({"text": "Привет мир", "speaker": "xenia"}).encode(),
+                    headers=headers,
+                )
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    urllib.request.urlopen(req)
+                self.assertEqual(err.exception.code, 400)
+        finally:
+            http.shutdown()
+            http.server_close()
+            thread.join(timeout=2)
+            server.API_KEY = original
+
+    def test_model_checksum_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sample = os.path.join(directory, "model.pt")
+            with open(sample, "wb") as handle:
+                handle.write(b"fake-model-bytes")
+            with self.assertRaises(ValueError):
+                server.verify_model_file(sample, "v5_6_ru")
+            with self.assertRaises(ValueError):
+                server.verify_model_file(sample, "v5_99_ru")
+            with patch.dict(os.environ, {"SILERO_MODEL_SHA256": server.file_sha256(sample)}):
+                server.verify_model_file(sample, "v5_99_ru")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Optional CPU Silero service. No book text or generated audio is retained."""
+import hashlib
 import hmac
 import json
 import logging
@@ -20,6 +21,10 @@ import torch
 from num2words import num2words
 
 MODEL_ID = os.environ.get("SILERO_MODEL", "v5_6_ru")
+MODEL_SHA256 = {
+    "v5_6_ru": "04cc9b1d08ce38bcaa9d02c488d80d3e6806d17f7eaa7c95982f36a3cbf50b2e",
+    "v5_5_ru": "50081637b602126ee06cb3bc8a744d25651d2da149ee8864b9a379bfdd934437",
+}
 SPEAKERS = ("aidar", "baya", "kseniya", "xenia", "eugene")
 SAMPLE_RATE = 24000
 MAX_REQUEST = 16 * 1024 * 1024
@@ -71,14 +76,22 @@ def cancel_job(request_id):
 
 
 def normalize_numbers(text):
+    length = len(text)
+
     def words(match):
+        nonlocal length
         digits = match.group()
         # Read long identifiers digit by digit rather than as enormous cardinals.
         if len(digits) > 15:
             value = " ".join(num2words(int(digit), lang="ru") for digit in digits)
         else:
             value = num2words(int(digits), lang="ru")
-        return f" {value} "
+        expanded = f" {value} "
+        length += len(expanded) - len(digits)
+        if length > MAX_TEXT:
+            raise ValueError("Normalized text exceeds synthesis limit")
+        return expanded
+
     return re.sub(r"\s+", " ", re.sub(r"\d+", words, text)).strip()
 
 
@@ -104,7 +117,7 @@ def split_text(text, limit=700, accentuate=None):
             cut = ends[-1].end() if ends else prefix.rfind(" ")
             if cut < 1:
                 cut = limit
-            if paragraph[cut - 1] == "+":
+            if cut > 1 and paragraph[cut - 1] == "+":
                 cut -= 1
             chunk = paragraph[:cut].strip()
             if re.search(r"[А-Яа-яЁё]", chunk):
@@ -112,10 +125,39 @@ def split_text(text, limit=700, accentuate=None):
             paragraph = paragraph[cut:].strip()
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        while chunk := source.read(65536):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def expected_model_sha256(model_id):
+    override = os.environ.get("SILERO_MODEL_SHA256", "").strip().lower()
+    if override:
+        if not re.fullmatch(r"[0-9a-f]{64}", override):
+            raise ValueError("SILERO_MODEL_SHA256 must be a 64-character hex SHA-256 digest")
+        return override
+    expected = MODEL_SHA256.get(model_id)
+    if not expected:
+        raise ValueError(f"Unknown Silero model checksum for {model_id}; set SILERO_MODEL_SHA256")
+    return expected
+
+
+def verify_model_file(path, model_id):
+    expected = expected_model_sha256(model_id)
+    actual = file_sha256(path)
+    if not hmac.compare_digest(actual.encode("ascii"), expected.encode("ascii")):
+        raise ValueError(f"Silero model {model_id} SHA-256 mismatch: expected {expected}, got {actual}")
+
+
 def load_model():
     global MODEL
     if MODEL is not None:
         return MODEL
+    if not re.fullmatch(r"v5(?:_\d+)?_ru", MODEL_ID):
+        raise ValueError("SILERO_MODEL must be a Russian Silero v5 model")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model_file = MODEL_DIR / f"{MODEL_ID}.pt"
     if not model_file.exists():
@@ -126,9 +168,12 @@ def load_model():
                 f"https://models.silero.ai/models/tts/ru/{MODEL_ID}.pt", timeout=120
             ) as source, temporary.open("wb") as target:
                 shutil.copyfileobj(source, target)
+            verify_model_file(temporary, MODEL_ID)
             temporary.replace(model_file)
         finally:
             temporary.unlink(missing_ok=True)
+    else:
+        verify_model_file(model_file, MODEL_ID)
     torch.set_num_threads(max(1, min(16, int(os.environ.get("SILERO_THREADS", "4")))))
     MODEL = torch.package.PackageImporter(str(model_file)).load_pickle("tts_models", "model")
     MODEL.to(torch.device("cpu"))
@@ -165,14 +210,16 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
             update_job(request_id, progress=preparation_share * min(1, total / max(1, len(text))))
     if not total or total > MAX_TEXT:
         raise ValueError("Normalized text exceeds synthesis limit or is empty")
-    update_job(request_id, state="generating", progress=preparation_share, remainingSeconds=round(total / SPEED))
+    with STATE_LOCK:
+        current_speed = SPEED
+    update_job(request_id, state="generating", progress=preparation_share, remainingSeconds=round(total / current_speed))
     mp3_file = Path(directory) / "speech.mp3"
     # Encode incrementally: a whole-book PCM/WAV file can occupy gigabytes.
     encoder = subprocess.Popen(
         ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
          "-f", "s16le", "-ar", str(SAMPLE_RATE), "-ac", "1", "-i", "pipe:0",
          "-codec:a", "libmp3lame", "-b:a", "64k", str(mp3_file)],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
     )
     generated_characters = 0
     try:
@@ -197,13 +244,23 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
                            remainingSeconds=round((total - generated_characters) * elapsed / generated_characters))
         encoder.stdin.close()
         if encoder.wait(timeout=300) != 0:
+            stderr_text = ""
+            if encoder.stderr is not None:
+                try:
+                    stderr_text = encoder.stderr.read(4096).decode("utf-8", "replace").strip()
+                except Exception:
+                    stderr_text = ""
+            if stderr_text:
+                logging.error("FFmpeg stderr: %s", stderr_text)
             raise RuntimeError("FFmpeg encoding failed")
     finally:
         if encoder.poll() is None:
             encoder.kill()
             encoder.wait(timeout=10)
-        if not encoder.stdin.closed:
+        if encoder.stdin is not None and not encoder.stdin.closed:
             encoder.stdin.close()
+        if encoder.stderr is not None and not encoder.stderr.closed:
+            encoder.stderr.close()
     check_cancelled(request_id)
     elapsed = max(0.01, time.monotonic() - started)
     with STATE_LOCK:
@@ -214,14 +271,59 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
     return mp3_file
 
 
+def _authorized(header_value):
+    if not API_KEY:
+        return True
+    actual = (header_value or "").encode("utf-8", "replace")
+    expected = f"Bearer {API_KEY}".encode("utf-8")
+    return hmac.compare_digest(actual, expected)
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 16
+
+    def __init__(self, server_address, handler_class, max_connections=32):
+        self._conn_slots = threading.Semaphore(max_connections)
+        super().__init__(server_address, handler_class)
+
+    def process_request(self, request, client_address):
+        if not self._conn_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._conn_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_slots.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 30
+
+    def setup(self):
+        self._headers_sent = False
+        super().setup()
+
+    def send_response(self, code, message=None):
+        self._headers_sent = True
+        super().send_response(code, message)
 
     def log_message(self, format_string, *args):
         # Requests contain no credentials or text in their URLs.
         logging.info(format_string, *args)
 
     def reply(self, code, message):
+        if self._headers_sent:
+            return
         data = json.dumps({"error": message}, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -232,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
-        if self.path != "/health" and API_KEY and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {API_KEY}"):
+        if self.path != "/health" and not _authorized(self.headers.get("Authorization", "")):
             return self.reply(401, "Unauthorized")
         if self.path == "/estimate":
             with STATE_LOCK:
@@ -260,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_POST(self):
-        if API_KEY and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {API_KEY}"):
+        if not _authorized(self.headers.get("Authorization", "")):
             return self.reply(401, "Unauthorized")
         match = re.fullmatch(r"/jobs/([a-f0-9]{64})/cancel", self.path)
         if match:
@@ -290,34 +392,54 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, "Invalid JSON")
         if not LOCK.acquire(blocking=False):
             return self.reply(429, "Synthesis is busy")
+        lock_held = True
         try:
-            with tempfile.TemporaryDirectory(prefix="silero-") as directory:
-                audio = synthesize(text, speaker, directory, request_id, options, segments)
-                self.send_response(200)
-                self.send_header("Content-Type", "audio/mpeg")
-                self.send_header("X-INPX-Speech-Options", "1")
-                self.send_header("X-INPX-Speech-Engine", STRESS.cache_identity or "builtin")
-                self.send_header("Content-Length", str(audio.stat().st_size))
-                self.send_header("Connection", "close")
-                self.end_headers()
-                with audio.open("rb") as source:
-                    shutil.copyfileobj(source, self.wfile)
-                self.close_connection = True
+            try:
+                with tempfile.TemporaryDirectory(prefix="silero-") as directory:
+                    try:
+                        audio = synthesize(text, speaker, directory, request_id, options, segments)
+                    finally:
+                        if lock_held:
+                            lock_held = False
+                            LOCK.release()
+                    # Stream the finished MP3 without holding the synthesis lock.
+                    audio_size = audio.stat().st_size
+                    with audio.open("rb") as source:
+                        self.connection.settimeout(60)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "audio/mpeg")
+                        self.send_header("X-INPX-Speech-Options", "1")
+                        self.send_header("X-INPX-Speech-Engine", STRESS.cache_identity or "builtin")
+                        self.send_header("Content-Length", str(audio_size))
+                        self.send_header("Connection", "close")
+                        self.close_connection = True
+                        self.end_headers()
+                        shutil.copyfileobj(source, self.wfile)
+            finally:
+                if lock_held:
+                    lock_held = False
+                    LOCK.release()
         except SynthesisCancelled:
             update_job(request_id, state="cancelled", remainingSeconds=None)
             self.reply(409, "Synthesis cancelled")
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ValueError as error:
+            update_job(request_id, state="error", remainingSeconds=None)
+            self.reply(400, str(error))
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            if self._headers_sent:
+                self.close_connection = True
+                return
+            update_job(request_id, state="error", remainingSeconds=None)
+            logging.exception("Synthesis failed")
+            self.reply(500, "Synthesis failed; check service logs")
         except Exception:
             update_job(request_id, state="error", remainingSeconds=None)
             logging.exception("Synthesis failed")
             self.reply(500, "Synthesis failed; check service logs")
-        finally:
-            LOCK.release()
 
 
 if __name__ == "__main__":
     if not re.fullmatch(r"v5(?:_\d+)?_ru", MODEL_ID):
         raise ValueError("SILERO_MODEL must be a Russian Silero v5 model")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("SILERO_PORT", "8000"))), Handler).serve_forever()
+    BoundedThreadingHTTPServer(("0.0.0.0", int(os.environ.get("SILERO_PORT", "8000"))), Handler).serve_forever()
