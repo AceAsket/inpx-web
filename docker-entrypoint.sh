@@ -117,16 +117,10 @@ if [ "$#" -gt 0 ]; then
 fi
 
 set -- inpx-web \
+    "--host=${HOST:-0.0.0.0}" \
+    "--port=${PORT:-12380}" \
     "--data-dir=$DATA_DIR_VALUE" \
     "--lib-dir=$LIBDIR_VALUE"
-
-if [ -n "${HOST:-}" ]; then
-    set -- "$@" "--host=$HOST"
-fi
-
-if [ -n "${PORT:-}" ]; then
-    set -- "$@" "--port=$PORT"
-fi
 
 if [ -n "$INPX_VALUE" ]; then
     set -- "$@" "--inpx=$INPX_VALUE"

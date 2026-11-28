@@ -319,6 +319,7 @@ async function main() {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-binary-smoke-'));
     const library = path.join(dir, 'library');
     const containerName = `inpx-smoke-${process.pid}-${Date.now()}`;
+    const dataVolume = rust && imageName ? `${containerName}-data` : null;
     let child;
     let exited;
     let output = '';
@@ -333,8 +334,15 @@ async function main() {
         let args;
         if (target === '--image') {
             command = 'docker';
+            const dataMount = dataVolume ? ['--mount', `type=volume,source=${dataVolume},target=/data`] : ['--tmpfs', '/data'];
+            if (dataVolume) {
+                // Keep the published Docker port working with listener settings saved by standalone.
+                await promisify(execFile)('docker', ['run', '--rm', ...dataMount, '--entrypoint', 'sh', imageName, '-ec',
+                    `printf '%s\\n' '{"server":{"host":"::","port":"12382","root":""}}' > /data/config.json`],
+                {windowsHide:true, timeout:30000});
+            }
             args = ['run', '--rm', '--name', containerName,
-                '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
+                '-p', `127.0.0.1:${port}:12380`, ...dataMount,
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
                 '-e', 'INPX_KOSYNC_ENABLED=true',
@@ -412,8 +420,11 @@ async function main() {
         assert.ok(ready, `Packaged application did not index the fixture and become ready (${readiness}):\n${output}`);
         if (rust) {
             assert.match(output,/^inpx-web v[^\s]+ listening on /m);
-            if (imageName) await promisify(execFile)('docker',['exec',containerName,'sh','-ec',
-                'if command -v node >/dev/null; then exit 1; fi; test -s /usr/local/bin/bin/public.json']);
+            if (imageName) await promisify(execFile)('docker',['exec',containerName,'sh','-ec',[
+                'if command -v node >/dev/null; then exit 1; fi',
+                'test -s /usr/local/bin/bin/public.json',
+                'if [ -x /usr/local/bin/docker-healthcheck.sh ]; then /usr/local/bin/docker-healthcheck.sh; fi',
+            ].join('\n')]);
         }
         if (requireRustCatalogue) {
             if (target === '--image') {
@@ -502,6 +513,8 @@ async function main() {
     } finally {
         if (target === '--image')
             await promisify(execFile)('docker', ['rm', '-f', containerName], {windowsHide: true, timeout: 15000}).catch(() => {});
+        if (dataVolume)
+            await promisify(execFile)('docker', ['volume', 'rm', dataVolume], {windowsHide:true, timeout:15000}).catch(() => {});
         if (child?.pid && child.exitCode === null && child.signalCode === null) {
             if (process.platform === 'win32' && target !== '--image') {
                 const taskkill = path.join(process.env.SystemRoot, 'System32', 'taskkill.exe');
